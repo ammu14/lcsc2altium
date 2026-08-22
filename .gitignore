@@ -1,0 +1,11 @@
+﻿# 输出产物（运行时生成，不进仓库）
+out/
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 操作系统文件
+Thumbs.db
+.DS_Store
