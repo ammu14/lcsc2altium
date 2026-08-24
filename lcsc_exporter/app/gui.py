@@ -1,18 +1,22 @@
-"""Qt GUI：输入 LCSC 商城元件编号 → 调用 npnp 生成 Altium .SchLib + .PcbLib + STEP。
+"""Qt GUI：输入 LCSC 商城元件编号 → 按目标 EDA 一键导出可直接使用的库文件。
+
+支持的目标:
+  - Altium Designer: .SchLib + .PcbLib + STEP（npnp 直出，3D 内嵌 .PcbLib）
+  - KiCad:           .kicad_sym + {型号}.pretty/封装库（npnp 取源 +
+                     内置转换器直出，STEP 与 .kicad_mod 同目录绑定 3D）
 
 用法:
   python -m lcsc_exporter.app
 或双击工作区根目录的 lcsc2altium_gui.pyw（无控制台窗口）。
 
-Qt 绑定自动适配：PySide6（工作区 .tools/pylibs）→ PyQt6 → PyQt5，
-三者装任何一个即可运行（API 差异用下方兼容层抹平）。
-
-导出逻辑：直接调用工作区内的 npnp（Rust 工具）子命令
-（export-schlib / export-pcblib / download-step），本 GUI 只是 npnp 的一层皮。
+Qt 绑定自动适配：PySide6（工作区 .tools/pylibs）→ PyQt6 → PyQt5。
+KiCad 转换为内置实现（lcsc_exporter.convert，EasyEDA 源 → KiCad 6+ 格式），
+无需安装任何外部工具。
 """
 from __future__ import annotations
 
 import glob
+import json
 import os
 import re
 import subprocess
@@ -29,9 +33,9 @@ try:
     from PySide6.QtCore import QThread, Signal, QUrl
     from PySide6.QtGui import QDesktopServices
     from PySide6.QtWidgets import (
-        QApplication, QCheckBox, QFileDialog, QHBoxLayout, QHeaderView,
-        QLabel, QLineEdit, QPlainTextEdit, QProgressBar, QPushButton,
-        QSplitter, QStatusBar, QTableWidget, QTableWidgetItem,
+        QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
+        QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QProgressBar,
+        QPushButton, QSplitter, QStatusBar, QTableWidget, QTableWidgetItem,
         QVBoxLayout, QWidget,
     )
     QT_BINDING = "PySide6"
@@ -40,20 +44,20 @@ except ImportError:
         from PyQt6.QtCore import QThread, pyqtSignal as Signal, QUrl
         from PyQt6.QtGui import QDesktopServices
         from PyQt6.QtWidgets import (
-            QApplication, QCheckBox, QFileDialog, QHBoxLayout, QHeaderView,
-            QLabel, QLineEdit, QPlainTextEdit, QProgressBar, QPushButton,
-            QSplitter, QStatusBar, QTableWidget, QTableWidgetItem,
-            QVBoxLayout, QWidget,
+            QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
+            QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QProgressBar,
+            QPushButton, QSplitter, QStatusBar, QTableWidget,
+            QTableWidgetItem, QVBoxLayout, QWidget,
         )
         QT_BINDING = "PyQt6"
     except ImportError:
         from PyQt5.QtCore import QThread, pyqtSignal as Signal, QUrl
         from PyQt5.QtGui import QDesktopServices
         from PyQt5.QtWidgets import (
-            QApplication, QCheckBox, QFileDialog, QHBoxLayout, QHeaderView,
-            QLabel, QLineEdit, QPlainTextEdit, QProgressBar, QPushButton,
-            QSplitter, QStatusBar, QTableWidget, QTableWidgetItem,
-            QVBoxLayout, QWidget,
+            QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
+            QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QProgressBar,
+            QPushButton, QSplitter, QStatusBar, QTableWidget,
+            QTableWidgetItem, QVBoxLayout, QWidget,
         )
         QT_BINDING = "PyQt5"
 
@@ -99,18 +103,25 @@ def parse_codes(text: str) -> list[str]:
     return out
 
 
+# 导出目标: 键 -> 界面显示文本
+TARGETS = {
+    "altium": "Altium Designer（.SchLib + .PcbLib，3D 内嵌）",
+    "kicad": "KiCad（.kicad_sym + .pretty 封装库，3D 绑定）",
+}
+
+
 class ExportWorker(QThread):
-    """后台导出：调用 npnp 子命令（不阻塞 UI）。"""
+    """后台导出：调用 npnp 子命令 + 内置 KiCad 转换器（不阻塞 UI）。"""
     log = Signal(str)
-    item_done = Signal(object)   # 结果 dict {code, mpn, schlib, pcblib, step, warnings/error}
+    item_done = Signal(object)   # 结果 dict {code, mpn, files, warnings/error}
     all_done = Signal(int, int)  # ok, total
 
     def __init__(self, codes: list[str], outdir: str,
-                 with_step: bool, force: bool, parent=None):
+                 target: str, force: bool, parent=None):
         super().__init__(parent)
         self.codes = codes
         self.outdir = outdir
-        self.with_step = with_step
+        self.target = target
         self.force = force
 
     def _npnp_args(self, sub: str, code: str, subdir: str) -> list[str]:
@@ -139,35 +150,132 @@ class ExportWorker(QThread):
         m = glob.glob(os.path.join(subdir, f"*.{ext}"))
         return os.path.basename(m[0]) if m else ""
 
+    def _rename_to_mpn(self, subdir: str, code: str, mpn: str) -> None:
+        """导出完成后把 out/{编号}/ 重命名为 out/{型号}/。
+
+        型号含 Windows 非法字符时替换为 _；目标目录已存在时回退为
+        {型号}_{编号}；仍冲突或重命名失败则保留原编号目录（仅告警）。
+        """
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", mpn).strip(" .")
+        if not name:
+            return
+        target = os.path.join(self.outdir, name)
+        if os.path.normcase(os.path.abspath(target)) == \
+                os.path.normcase(os.path.abspath(subdir)):
+            return
+        if os.path.exists(target):
+            target = os.path.join(self.outdir, f"{name}_{code}")
+        if os.path.exists(target):
+            self.log.emit(f"[warn] 目录 {os.path.basename(target)}/ 已存在，"
+                          f"保留 {code}/")
+            return
+        try:
+            os.rename(subdir, target)
+            self.log.emit(f"输出目录: {code}/ → {os.path.basename(target)}/")
+        except OSError as e:
+            self.log.emit(f"[warn] 目录重命名失败，保留 {code}/: {e}")
+
+    # 目录命名优先级: 从产物文件名推断元件型号（保留 MPN 原始大小写的优先）
+    _MPN_SUFFIXES = (".SchLib", ".kicad_sym", "_symbol_easyeda.json",
+                     "_bundle.json", ".PcbLib", ".kicad_mod",
+                     ".step", ".STEP", ".obj")
+
+    @classmethod
+    def _derive_mpn(cls, files: list[str]) -> str:
+        for suffix in cls._MPN_SUFFIXES:
+            for f in files:
+                if f.endswith(suffix):
+                    return f[:-len(suffix)]
+        return ""
+
+    def _sub(self, npnp: str, sub: str, code: str, subdir: str) -> None:
+        self._run_npnp(npnp, self._npnp_args(sub, code, subdir))
+
+    def _export_altium(self, npnp: str, code: str, subdir: str, r: dict) -> None:
+        """AD 三件套: .SchLib + .PcbLib（3D 已内嵌）+ 独立 .step。"""
+        files: list[str] = r["files"]
+        for sub, ext in (("export-schlib", "SchLib"),
+                         ("export-pcblib", "PcbLib")):
+            self._sub(npnp, sub, code, subdir)
+            m = glob.glob(os.path.join(subdir, f"*.{ext}"))
+            if not m:
+                raise RuntimeError(f"{ext} 未生成")
+            files.append(os.path.basename(m[0]))
+        try:
+            self._sub(npnp, "download-step", code, subdir)
+            step = (self._find_file(subdir, "step")
+                    or self._find_file(subdir, "STEP"))
+            if step:
+                files.append(step)
+            else:
+                r["warnings"].append("STEP 未生成")
+        except Exception as e:  # noqa: BLE001 — STEP 缺失不阻断
+            r["warnings"].append(f"STEP 失败: {e}")
+
+    def _export_kicad(self, npnp: str, code: str, subdir: str, r: dict) -> None:
+        """KiCad 套件: .kicad_sym + <MPN>.pretty/<封装>.kicad_mod + 绑定 STEP。"""
+        from lcsc_exporter.convert.kicad import convert_to_kicad
+        files: list[str] = r["files"]
+        # 1) 取 EasyEDA 源（中间产物，用完即删）
+        self._sub(npnp, "export-source", code, subdir)
+        syms = sorted(glob.glob(os.path.join(subdir, "*_symbol_easyeda.json")))
+        fps = sorted(glob.glob(os.path.join(subdir, "*_footprint_easyeda.json")))
+        if not (syms and fps):
+            raise RuntimeError("未取到符号/封装源数据")
+        # 2) 取 STEP（3D，绑定进封装库目录）
+        step_path = ""
+        try:
+            self._sub(npnp, "download-step", code, subdir)
+            m = glob.glob(os.path.join(subdir, "*.step")) \
+                + glob.glob(os.path.join(subdir, "*.STEP"))
+            step_path = m[0] if m else ""
+            if not step_path:
+                r["warnings"].append("STEP 未生成（封装将无 3D）")
+        except Exception as e:  # noqa: BLE001
+            r["warnings"].append(f"STEP 失败: {e}")
+        # 3) 转换为 KiCad 原生库（STEP 移入 .pretty 绑定）
+        with open(syms[0], encoding="utf-8") as f:
+            sym_src = json.load(f)
+        with open(fps[0], encoding="utf-8") as f:
+            fp_src = json.load(f)
+        out = convert_to_kicad(sym_src, fp_src, subdir, step_path)
+        files += [out["sym"], out["mod"], out["step"]]
+        files = [f for f in files if f]
+        r["files"] = files
+        # 4) 清理中间产物
+        for p in syms + fps:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        self.log.emit(f"KiCad 转换: {out['sym']}, {out['pretty']}/")
+
+    def _export_one(self, npnp: str, code: str, subdir: str, r: dict) -> None:
+        if self.target == "kicad":
+            self._export_kicad(npnp, code, subdir, r)
+        else:
+            self._export_altium(npnp, code, subdir, r)
+
     def run(self):
         npnp = find_npnp()
         if not npnp:
-            self.log.emit("[ERROR] 找不到 npnp 可执行文件，请确认 .tools/rust/ 下已编译 npnp")
+            self.log.emit("[ERROR] 找不到 npnp 可执行文件，请确认 .tools/bin/ 下有 npnp")
             self.all_done.emit(0, len(self.codes))
             return
-        self.log.emit(f"使用 npnp: {npnp}\n")
+        self.log.emit(f"使用 npnp: {npnp}")
+        self.log.emit(f"导出目标: {TARGETS.get(self.target, self.target)}\n")
         ok = 0
         for i, code in enumerate(self.codes, 1):
             self.log.emit(f"--- [{i}/{len(self.codes)}] {code} ---")
             subdir = os.path.join(self.outdir, code)
             os.makedirs(subdir, exist_ok=True)
-            r = dict(code=code, mpn="", schlib="", pcblib="", step="", warnings=[])
+            r = dict(code=code, mpn="", files=[], warnings=[])
             try:
-                self._run_npnp(npnp, self._npnp_args("export-schlib", code, subdir))
-                r["schlib"] = self._find_file(subdir, "SchLib")
-                self._run_npnp(npnp, self._npnp_args("export-pcblib", code, subdir))
-                r["pcblib"] = self._find_file(subdir, "PcbLib")
-                if self.with_step:
-                    try:
-                        self._run_npnp(npnp, self._npnp_args("download-step", code, subdir))
-                        r["step"] = (self._find_file(subdir, "step")
-                                     or self._find_file(subdir, "STEP"))
-                        if not r["step"]:
-                            r["warnings"].append("未生成 STEP")
-                    except Exception as e:  # noqa: BLE001 — STEP 失败不阻断整体
-                        r["warnings"].append(f"STEP 失败: {e}")
-                if not (r["schlib"] and r["pcblib"]):
-                    raise RuntimeError("未生成 SchLib/PcbLib 文件")
+                self._export_one(npnp, code, subdir, r)
+                if not r["files"]:
+                    raise RuntimeError("未生成任何文件")
+                r["mpn"] = self._derive_mpn(r["files"])
+                self._rename_to_mpn(subdir, code, r["mpn"])
                 ok += 1
             except Exception as e:  # noqa: BLE001 — GUI 需兜底一切异常
                 r["error"] = str(e)
@@ -179,7 +287,7 @@ class ExportWorker(QThread):
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("LCSC 元件 Altium 导出器（.SchLib / .PcbLib / STEP）")
+        self.setWindowTitle("LCSC 元件导出器（Altium / KiCad 一键直出）")
         self.resize(980, 640)
         self._worker: ExportWorker | None = None
 
@@ -204,12 +312,20 @@ class MainWindow(QWidget):
         row2.addWidget(browse)
         root.addLayout(row2)
 
+        # 导出目标选择（选了哪种就直接出哪种，无需再转换）
+        fmt_row = QHBoxLayout()
+        fmt_row.addWidget(self._label("导出目标:"))
+        self.target_cb = QComboBox()
+        for key, text in TARGETS.items():
+            self.target_cb.addItem(text, key)
+        self.target_cb.setCurrentIndex(0)
+        fmt_row.addWidget(self.target_cb, 1)
+        fmt_row.addStretch(1)
+        root.addLayout(fmt_row)
+
         # 选项 + 按钮
         row3 = QHBoxLayout()
-        self.step_cb = QCheckBox("下载 3D 模型（无底座 STEP）")
-        self.step_cb.setChecked(True)
         self.force_cb = QCheckBox("强制重新抓取数据")
-        row3.addWidget(self.step_cb)
         row3.addWidget(self.force_cb)
         row3.addStretch(1)
         self.open_dir_btn = QPushButton("打开输出目录")
@@ -232,14 +348,13 @@ class MainWindow(QWidget):
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setPlaceholderText("导出日志…")
-        self.table = QTableWidget(0, 6)
+        self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(
-            ["编号", "MPN/描述", "SchLib", "PcbLib", "STEP", "状态"])
+            ["编号", "MPN/描述", "产物文件", "状态"])
         self.table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.Stretch)
-        for i in (2, 3, 4):
-            self.table.horizontalHeader().setSectionResizeMode(
-                i, QHeaderView.ResizeToContents)
+            1, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.Stretch)
         splitter.addWidget(self.log_view)
         splitter.addWidget(self.table)
         splitter.setSizes([260, 340])
@@ -273,15 +388,16 @@ class MainWindow(QWidget):
         if not codes:
             self.statusBar.showMessage("请先输入 LCSC 元件编号")
             return
+        target = self.target_cb.currentData() or "altium"
         self.table.setRowCount(0)
         self.progress.setRange(0, len(codes))
         self.progress.setValue(0)
         self.progress.setVisible(True)
         self.export_btn.setEnabled(False)
         out = self.out_edit.text().strip() or "out"
-        self._log(f"开始导出 {len(codes)} 个元件 → {out}\n")
+        self._log(f"开始导出 {len(codes)} 个元件 → {out}（目标: {TARGETS[target]}）\n")
         self._worker = ExportWorker(codes, out,
-                                    with_step=self.step_cb.isChecked(),
+                                    target=target,
                                     force=self.force_cb.isChecked(),
                                     parent=self)
         self._worker.log.connect(self._log)
@@ -299,14 +415,13 @@ class MainWindow(QWidget):
         cell(0, r.get("code", ""))
         mpn = r.get("mpn", "")
         cell(1, mpn, mpn)
-        cell(2, r.get("schlib") or "", r.get("schlib") or "")
-        cell(3, r.get("pcblib") or "", r.get("pcblib") or "")
-        cell(4, r.get("step") or "", r.get("step") or "")
+        files = r.get("files", [])
+        cell(2, "; ".join(files), "\n".join(files))
         if r.get("error"):
-            cell(5, "失败", r["error"])
+            cell(3, "失败", r["error"])
         else:
             warn = "，".join(r.get("warnings", [])) or "成功"
-            cell(5, warn, warn)
+            cell(3, warn, warn)
         self.progress.setValue(self.progress.value() + 1)
 
     def _all_done(self, ok: int, total: int):
@@ -316,8 +431,8 @@ class MainWindow(QWidget):
         self.statusBar.showMessage(f"完成: {ok}/{total}")
         out = self.out_edit.text().strip() or "out"
         self._log(f"\n完成: {ok}/{total}，输出目录: {os.path.abspath(out)}")
-        self._log("下一步: 在 Altium 中 File → Place → Part 导入 .SchLib，"
-                  "PCB 中 Footprint 导入 .PcbLib 验证。")
+        self._log("提示: AD 目标出 .SchLib/.PcbLib；KiCad 目标出 .kicad_sym/.kicad_mod"
+                  "（含 STEP 3D 关联），复制进对应库目录即可使用。")
 
 
 def main() -> int:

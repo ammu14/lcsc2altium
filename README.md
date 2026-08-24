@@ -1,34 +1,34 @@
 # LCSC 元件一键导出工具
 
-输入**立创商城（LCSC）元件编号**，一键导出 Altium Designer 可用的三件套：
+输入**立创商城（LCSC）元件编号**，**选择目标 EDA**，一键直出可直接导入的库文件——不需要再用别的工具转换：
 
-| 文件 | 说明 |
-|------|------|
-| `.SchLib` | Altium **原理图库**（符号 + 引脚 + 参数元数据） |
-| `.PcbLib` | Altium **PCB 封装库**（焊盘/丝印/阻焊/钢网/机械层，内嵌 3D 模型） |
-| `.step` | **3D 封装 STEP**（立创标准库原生，无底座，单位 mm） |
+| 导出目标 | 产物 | 3D 模型 |
+|----------|------|---------|
+| **Altium Designer** | `.SchLib` + `.PcbLib`（+ 独立 `.step`） | **内嵌**在 `.PcbLib` 里 |
+| **KiCad** | `.kicad_sym` + `{型号}.pretty/*.kicad_mod` | **绑定**在 `.kicad_mod` 旁（同目录 STEP 引用） |
 
 ## 特点
 
-- **GUI 操作**：输入编号（单个或批量）→ 点一下 → 自动抓取并生成全部文件。
-- **Altium 原生格式**：`.SchLib` / `.PcbLib` 为 Altium Designer 二进制格式，导入即用。
-- **3D 无底座**：STEP 直接采用立创标准库原生模型，原点 = 元件中心、z=0 = PCB 面，可直接装配仿真。
+- **GUI 操作**：输入编号（单个或批量）→ 选目标 → 点一下 → 产物开箱即用。
+- **Altium/KiCad 双直出**：选哪个出哪个，KiCad 由内置 EasyEDA→KiCad 转换器生成，无需外部工具。
+- **3D 绑定封装库**：AD 版 STEP 内嵌进 `.PcbLib`；KiCad 版 STEP 与 `.kicad_mod` 同目录自动关联。
+- **3D 无底座**：STEP 直接采用立创标准库原生模型，原点 = 元件中心、z=0 = PCB 面。
 - **批量支持**：多个编号用空格/逗号/换行分隔，一次性导出。
 
 ## 内核与开源归属
 
-本工具的 GUI（PySide6 界面、批量/输出管理）是自研的**薄壳**；真正完成**立创数据抓取 + Altium `.SchLib` / `.PcbLib` / STEP 生成**的内核，是开源工具 **npnp**：
+本工具的 GUI（PySide6 界面、批量/输出管理）与 **KiCad 转换器**（`lcsc_exporter/convert/`）是自研部分；**立创数据抓取 + Altium `.SchLib` / `.PcbLib` / STEP 生成**的内核是开源工具 **npnp**：
 
 | 项 | 说明 |
 |----|------|
 | 名称 | npnp（"Normalize Pin Net Pad"） |
-| 作者 | **yycx2016** |
+| 作者 | **linkyourbin** |
 | 实现 | 纯 Rust |
-| 仓库 | <https://github.com/yycx2016/npnp> |
+| 仓库 | <https://github.com/yycx2016/npnp>（同 <https://github.com/linkyourbin/npnp>） |
 | 许可证 | **Apache-2.0** |
 
-- 本工具内置 `npnp.exe`（v1.0.2，位于 `.tools/bin/`），以**子进程**方式调用其 `export-schlib` / `export-pcblib` / `download-step` 子命令。
-- 分发本工具时请**保留 npnp 的 Apache-2.0 归属**（见仓库 LICENSE）。本 GUI 壳代码可自由使用，但 npnp 内核的版权与许可证归原作者所有。
+- 本工具内置 `npnp.exe`（v1.0.2，位于 `.tools/bin/`），以**子进程**方式调用其 `export-schlib` / `export-pcblib` / `download-step` / `download-obj` / `export-source` / `bundle` 子命令。
+- 分发本工具时请**保留 npnp 的 Apache-2.0 归属**（见仓库 LICENSE）。GUI 壳与 KiCad 转换器代码可自由使用。
 
 ## 快速开始
 
@@ -40,7 +40,7 @@ python -m lcsc_exporter.app
 
 或双击工作区根目录的 `lcsc2altium_gui.pyw`（无控制台窗口）。
 
-界面操作：输入 LCSC 编号 → 选输出目录 → 勾选"下载 3D 模型"/"强制重新抓取"（可选）→ 点"开始导出" → 产物在 `out/{编号}/`。
+界面操作：输入 LCSC 编号 → 选输出目录 → **下拉选择导出目标**（默认 Altium Designer）→ 点"开始导出" → 产物在 `out/{型号}/`（目录按元件型号命名，如 `out/STM32F103C8T6/`）。
 
 ## 详细文档
 
