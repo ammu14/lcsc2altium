@@ -1,0 +1,192 @@
+"""AI 助手页签：选型对话（OpenAI 兼容端点，默认阿里云百炼 qwen-plus）。
+
+设计要点:
+  - 系统提示词把助手定位成「立创选型工程师」，用户描述需求 → AI 推荐型号
+  - 聊天在 QThread 里跑，不阻塞界面
+  - API Key/Base URL/Model 可配置，保存到 ai_config.json（.gitignore 已排除）
+"""
+from __future__ import annotations
+
+import os
+import sys
+
+_TOOLS = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    ".tools", "pylibs")
+if os.path.isdir(_TOOLS) and _TOOLS not in sys.path:
+    sys.path.insert(0, _TOOLS)
+
+from PySide6.QtCore import QThread, Signal
+from PySide6.QtWidgets import (
+    QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QTextBrowser, QVBoxLayout, QWidget,
+)
+
+from ..ai.client import PRESETS, ChatClient, AIError
+from ..ai import config
+
+SYSTEM_PROMPT = (
+    "你是资深硬件工程师，帮助用户在立创商城（LCSC）选型。"
+    "用户描述需求时：\n"
+    "1) 推荐 2~4 个具体候选型号（MPN，尽量给立创在售的常见现货）；\n"
+    "2) 每个候选用一行给出关键参数（封装、供电、精度等）和推荐理由；\n"
+    "3) 参数不足时，先问一个最关键的澄清问题再给推荐；\n"
+    "4) 回答用简体中文，简洁，可用 Markdown 表格。"
+)
+
+
+class _ChatWorker(QThread):
+    done = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, messages: list[dict], parent=None):
+        super().__init__(parent)
+        self._messages = messages
+
+    def run(self):
+        try:
+            client = ChatClient(config.get_api_key(),
+                                config.get_base_url(), config.get_model())
+            self.done.emit(client.chat(self._messages))
+        except AIError as e:
+            self.failed.emit(str(e))
+        except Exception as e:  # noqa: BLE001 — UI 兜底
+            self.failed.emit(f"意外错误: {e}")
+
+
+class AIChatTab(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._worker: _ChatWorker | None = None
+        self._history: list[dict] = []
+        self._md_log = ""
+
+        root = QVBoxLayout(self)
+
+        # --- 配置行 ---
+        cfg = QHBoxLayout()
+        cfg.addWidget(QLabel("API Key:"))
+        self.key_edit = QLineEdit()
+        self.key_edit.setEchoMode(QLineEdit.Password)
+        self.key_edit.setPlaceholderText("sk-...（阿里云百炼 / DeepSeek 均可）")
+        if config.get_api_key():
+            self.key_edit.setText(config.get_api_key())
+        cfg.addWidget(self.key_edit, 2)
+
+        cfg.addWidget(QLabel("端点:"))
+        self.preset_cb = QComboBox()
+        self.preset_cb.setEditable(True)
+        for label, (url, _model) in PRESETS.items():
+            self.preset_cb.addItem(label, (url, _model))
+        cur = config.get_base_url()
+        idx = next((i for i in range(self.preset_cb.count())
+                    if self.preset_cb.itemData(i)[0] == cur), -1)
+        if idx >= 0:
+            self.preset_cb.setCurrentIndex(idx)
+        cfg.addWidget(self.preset_cb, 2)
+
+        cfg.addWidget(QLabel("模型:"))
+        self.model_edit = QLineEdit(config.get_model())
+        self.model_edit.setMaximumWidth(160)
+        cfg.addWidget(self.model_edit)
+
+        save_btn = QPushButton("保存配置")
+        save_btn.clicked.connect(self._save)
+        cfg.addWidget(save_btn)
+        root.addLayout(cfg)
+
+        self.status_lbl = QLabel()
+        root.addWidget(self.status_lbl)
+        self._refresh_status()
+
+        # --- 聊天显示 ---
+        self.chat = QTextBrowser()
+        self.chat.setOpenExternalLinks(False)
+        root.addWidget(self.chat, 1)
+
+        # --- 输入行 ---
+        row = QHBoxLayout()
+        self.input = QLineEdit()
+        self.input.setPlaceholderText(
+            "描述你要的元件，如：3.3V LDO，SOT-23，低静态电流，给 3.7V 锂电用")
+        self.input.returnPressed.connect(self._send)
+        row.addWidget(self.input, 1)
+        self.send_btn = QPushButton("发送")
+        self.send_btn.setDefault(True)
+        self.send_btn.clicked.connect(self._send)
+        row.addWidget(self.send_btn)
+        clear_btn = QPushButton("清空对话")
+        clear_btn.clicked.connect(self._clear)
+        row.addWidget(clear_btn)
+        root.addLayout(row)
+
+        self._append("系统",
+                     "我是立创选型助手。描述你需要的元件特征，我来推荐具体型号。\n"
+                     "（对话不会自动导出——挑好型号后，复制到「元件导出」页签即可）")
+
+    def _refresh_status(self):
+        mk = config.masked_key()
+        self.status_lbl.setText(
+            f"当前: {config.get_base_url()} | {config.get_model()} | "
+            + (f"Key 已配置（{mk}）" if mk else "⚠ 未配置 Key"))
+        self.status_lbl.setStyleSheet(
+            "color: gray" if mk else "color: #c0392b")
+
+    def _save(self):
+        preset = self.preset_cb.currentData()
+        if preset:                      # 选了预置端点：URL 和模型一起带出来
+            base_url, model = preset
+            self.model_edit.setText(model)
+        else:                           # 手填的自定义端点
+            base_url = self.preset_cb.currentText().strip()
+            model = self.model_edit.text()
+        config.save_settings(self.key_edit.text(), base_url, model)
+        self._refresh_status()
+        self._append("系统", "配置已保存。")
+
+    def _clear(self):
+        self._history.clear()
+        self._md_log = ""
+        self.chat.setMarkdown("")
+        self._append("系统", "对话已清空。")
+
+    def _append(self, who: str, text: str):
+        if who == "你":
+            safe = text.replace("&", "&amp;").replace("<", "&lt;")
+            self._md_log += f"\n\n> 🧑 **你**：{safe}\n"
+        elif who == "AI":
+            self._md_log += f"\n\n🤖 **助手**：\n\n{text}\n"
+        else:
+            self._md_log += f"\n\n*— {text} —*\n"
+        self.chat.setMarkdown(self._md_log)
+        sb = self.chat.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _send(self):
+        text = self.input.text().strip()
+        if not text or (self._worker and self._worker.isRunning()):
+            return
+        self.input.clear()
+        self._append("你", text)
+        self._history.append({"role": "user", "content": text})
+        messages = ([{"role": "system", "content": SYSTEM_PROMPT}]
+                    + self._history[-20:])   # 控制上下文长度
+        self.send_btn.setEnabled(False)
+        self.send_btn.setText("思考中…")
+        self._worker = _ChatWorker(messages, parent=self)
+        self._worker.done.connect(self._on_done)
+        self._worker.failed.connect(self._on_failed)
+        self._worker.start()
+
+    def _finish(self):
+        self.send_btn.setEnabled(True)
+        self.send_btn.setText("发送")
+
+    def _on_done(self, reply: str):
+        self._history.append({"role": "assistant", "content": reply})
+        self._append("AI", reply)
+        self._finish()
+
+    def _on_failed(self, err: str):
+        self._append("系统", f"调用失败：{err}")
+        self._finish()

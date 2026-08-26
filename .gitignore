@@ -1,5 +1,9 @@
-﻿# 输出产物（运行时生成，不进仓库）
+# 输出产物（运行时生成，不进仓库）
 out/
+
+# AI 配置（含 API Key，绝不进仓库）
+ai_config.json
+test_ai_key.py
 
 # Python 缓存
 __pycache__/

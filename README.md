@@ -12,12 +12,13 @@
 - **GUI 操作**：输入编号（单个或批量）→ 选目标 → 点一下 → 产物开箱即用。
 - **Altium/KiCad 双直出**：选哪个出哪个，KiCad 由内置 EasyEDA→KiCad 转换器生成，无需外部工具。
 - **3D 绑定封装库**：AD 版 STEP 内嵌进 `.PcbLib`；KiCad 版 STEP 与 `.kicad_mod` 同目录自动关联。
+- **AI 选型助手**：内置大模型对话（OpenAI 兼容协议，支持阿里云百炼/DeepSeek 等），描述需求特征即可推荐具体型号，挑好后复制到「元件导出」页一键出库。
 - **3D 无底座**：STEP 直接采用立创标准库原生模型，原点 = 元件中心、z=0 = PCB 面。
 - **批量支持**：多个编号用空格/逗号/换行分隔，一次性导出。
 
 ## 内核与开源归属
 
-本工具的 GUI（PySide6 界面、批量/输出管理）与 **KiCad 转换器**（`lcsc_exporter/convert/`）是自研部分；**立创数据抓取 + Altium `.SchLib` / `.PcbLib` / STEP 生成**的内核是开源工具 **npnp**：
+本工具的 GUI（PySide6 界面、批量/输出管理）、**KiCad 转换器**（`lcsc_exporter/convert/`）与 **AI 助手**（`lcsc_exporter/ai/`）是自研部分；**立创数据抓取 + Altium `.SchLib` / `.PcbLib` / STEP 生成**的内核是开源工具 **npnp**：
 
 | 项 | 说明 |
 |----|------|

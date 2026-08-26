@@ -35,8 +35,8 @@ try:
     from PySide6.QtWidgets import (
         QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
         QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QProgressBar,
-        QPushButton, QSplitter, QStatusBar, QTableWidget, QTableWidgetItem,
-        QVBoxLayout, QWidget,
+        QPushButton, QSplitter, QStatusBar, QTabWidget, QTableWidget,
+        QTableWidgetItem, QVBoxLayout, QWidget,
     )
     QT_BINDING = "PySide6"
 except ImportError:
@@ -46,7 +46,7 @@ except ImportError:
         from PyQt6.QtWidgets import (
             QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
             QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QProgressBar,
-            QPushButton, QSplitter, QStatusBar, QTableWidget,
+            QPushButton, QSplitter, QStatusBar, QTabWidget, QTableWidget,
             QTableWidgetItem, QVBoxLayout, QWidget,
         )
         QT_BINDING = "PyQt6"
@@ -56,7 +56,7 @@ except ImportError:
         from PyQt5.QtWidgets import (
             QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
             QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QProgressBar,
-            QPushButton, QSplitter, QStatusBar, QTableWidget,
+            QPushButton, QSplitter, QStatusBar, QTabWidget, QTableWidget,
             QTableWidgetItem, QVBoxLayout, QWidget,
         )
         QT_BINDING = "PyQt5"
@@ -287,11 +287,14 @@ class ExportWorker(QThread):
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("LCSC 元件导出器（Altium / KiCad 一键直出）")
+        self.setWindowTitle("LCSC 元件导出器（Altium / KiCad 一键直出 + AI 选型）")
         self.resize(980, 640)
         self._worker: ExportWorker | None = None
 
-        root = QVBoxLayout(self)
+        # 双页签：元件导出 + AI 助手（导出 UI 铺在 export_tab 里）
+        tabs = QTabWidget(self)
+        export_tab = QWidget()
+        root = QVBoxLayout(export_tab)
 
         # 编号输入
         row1 = QHBoxLayout()
@@ -363,6 +366,19 @@ class MainWindow(QWidget):
         self.statusBar = QStatusBar()
         root.addWidget(self.statusBar)
         self.statusBar.showMessage("就绪")
+
+        # 组装页签：AI 助手需要 PySide6（工作区自带）
+        tabs.addTab(export_tab, "元件导出")
+        if QT_BINDING == "PySide6":
+            try:
+                from lcsc_exporter.app.ai_tab import AIChatTab
+                tabs.addTab(AIChatTab(self), "AI 助手")
+            except Exception as e:  # noqa: BLE001 — AI 页签故障不影响导出主功能
+                self.statusBar.showMessage(f"AI 助手加载失败: {e}")
+        tabs.setCurrentIndex(0)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(tabs)
 
     @staticmethod
     def _label(text: str):
