@@ -9,6 +9,7 @@
 
 ## 特点
 
+- **安装包分发**：提供"下一步"式 Windows 安装向导（自动检测 Python 环境，缺失时引导安装），免管理员、带卸载；也支持绿色便携拷贝。
 - **GUI 操作**：输入编号（单个或批量）→ 选目标 → 点一下 → 产物开箱即用。
 - **Altium/KiCad 双直出**：选哪个出哪个，KiCad 由内置 EasyEDA→KiCad 转换器生成，无需外部工具。
 - **3D 绑定封装库**：AD 版 STEP 内嵌进 `.PcbLib`；KiCad 版 STEP 与 `.kicad_mod` 同目录自动关联。
@@ -33,7 +34,9 @@
 
 ## 快速开始
 
-> **全新电脑首次使用**？本工具自包含（只需装 Python）——按 `使用手册.md` 的「部署到一台新电脑」3 步：装 Python → 拷贝整个文件夹 → 双击运行。
+> **给最终用户**：拿 `lcsc2altium-setup-x.x.x.exe` 安装包，双击一路"下一步"（自动检测/引导安装 Python）。构建方式：`powershell -File installer\build_installer.ps1`。
+>
+> **绿色便携**：本工具自包含（只需装 Python）——装 Python → 拷贝整个文件夹 → 双击运行，详见 `使用手册.md`。
 
 ```powershell
 python -m lcsc_exporter.app
