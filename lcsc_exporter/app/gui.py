@@ -369,16 +369,25 @@ class MainWindow(QWidget):
 
         # 组装页签：AI 助手需要 PySide6（工作区自带）
         tabs.addTab(export_tab, "元件导出")
+        self._tabs = tabs
         if QT_BINDING == "PySide6":
             try:
                 from lcsc_exporter.app.ai_tab import AIChatTab
-                tabs.addTab(AIChatTab(self), "AI 助手")
+                self._ai_tab = AIChatTab(self)
+                self._ai_tab.send_to_export.connect(self._accept_ai_codes)
+                tabs.addTab(self._ai_tab, "AI 助手")
             except Exception as e:  # noqa: BLE001 — AI 页签故障不影响导出主功能
                 self.statusBar.showMessage(f"AI 助手加载失败: {e}")
         tabs.setCurrentIndex(0)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(tabs)
+
+    def _accept_ai_codes(self, codes: str):
+        """AI 助手核验通过的编号 → 填入导出框并切回导出页签。"""
+        self.codes_edit.setText(codes)
+        self._tabs.setCurrentIndex(0)
+        self.statusBar.showMessage("已填入核验通过的编号，点「开始导出」即可")
 
     @staticmethod
     def _label(text: str):

@@ -23,15 +23,28 @@ from PySide6.QtWidgets import (
 )
 
 from ..ai.client import PRESETS, ChatClient, AIError
-from ..ai import config
+from ..ai import config, lcsc
+
+
+class _VerifyWorker(QThread):
+    """后台逐个核验 AI 提到的型号在立创是否存在。"""
+    done = Signal(list)   # list[verify() 结果 dict]
+
+    def __init__(self, candidates: list[str], parent=None):
+        super().__init__(parent)
+        self._candidates = candidates
+
+    def run(self):
+        self.done.emit([lcsc.verify(mpn) for mpn in self._candidates])
 
 SYSTEM_PROMPT = (
     "你是资深硬件工程师，帮助用户在立创商城（LCSC）选型。"
     "用户描述需求时：\n"
-    "1) 推荐 2~4 个具体候选型号（MPN，尽量给立创在售的常见现货）；\n"
-    "2) 每个候选用一行给出关键参数（封装、供电、精度等）和推荐理由；\n"
-    "3) 参数不足时，先问一个最关键的澄清问题再给推荐；\n"
-    "4) 回答用简体中文，简洁，可用 Markdown 表格。"
+    "1) 推荐 2~4 个具体候选型号，只推荐立创商城大概率在售的常见现货型号；\n"
+    "2) 每个候选型号的完整 MPN 用 **加粗** 单独标出（程序要据此自动核验立创库存）；\n"
+    "3) 每个候选用一行给出关键参数（封装、供电、精度等）和推荐理由；\n"
+    "4) 参数不足时，先问一个最关键的澄清问题再给推荐；\n"
+    "5) 回答用简体中文，简洁，可用 Markdown 表格。"
 )
 
 
@@ -55,11 +68,16 @@ class _ChatWorker(QThread):
 
 
 class AIChatTab(QWidget):
+    """AI 选型对话 + 立创库存核验。send_to_export 携带核验过的 C 编号串。"""
+    send_to_export = Signal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._worker: _ChatWorker | None = None
+        self._verifier: _VerifyWorker | None = None
         self._history: list[dict] = []
         self._md_log = ""
+        self._verified_codes: list[str] = []
 
         root = QVBoxLayout(self)
 
@@ -120,9 +138,18 @@ class AIChatTab(QWidget):
         row.addWidget(clear_btn)
         root.addLayout(row)
 
+        # 核验后浮现的「填入导出框」按钮
+        self.export_btn = QPushButton()
+        self.export_btn.setVisible(False)
+        self.export_btn.setStyleSheet(
+            "QPushButton { background:#1e88e5; color:white; font-weight:bold; padding:4px }")
+        self.export_btn.clicked.connect(self._send_verified)
+        root.addWidget(self.export_btn)
+
         self._append("系统",
-                     "我是立创选型助手。描述你需要的元件特征，我来推荐具体型号。\n"
-                     "（对话不会自动导出——挑好型号后，复制到「元件导出」页签即可）")
+                     "我是立创选型助手。描述你需要的元件特征，我来推荐型号，"
+                     "并**自动到立创核验是否真实存在**（只信核验通过的）。\n"
+                     "核验通过后点下方按钮，一键把编号填进「元件导出」页签。")
 
     def _refresh_status(self):
         mk = config.masked_key()
@@ -186,7 +213,45 @@ class AIChatTab(QWidget):
         self._history.append({"role": "assistant", "content": reply})
         self._append("AI", reply)
         self._finish()
+        self._start_verify(reply)
 
     def _on_failed(self, err: str):
         self._append("系统", f"调用失败：{err}")
         self._finish()
+
+    # ---------- 立创核验 ----------
+
+    def _start_verify(self, reply: str):
+        candidates = lcsc.extract_candidates(reply)
+        if not candidates:
+            return
+        self._append("系统", f"🔍 正在立创核验 {len(candidates)} 个候选型号："
+                             + "、".join(candidates) + " …")
+        self._verifier = _VerifyWorker(candidates, parent=self)
+        self._verifier.done.connect(self._on_verified)
+        self._verifier.start()
+
+    def _on_verified(self, results: list[dict]):
+        ok = [r for r in results if r.get("found") is True]
+        no = [r for r in results if r.get("found") is False]
+        err = [r for r in results if r.get("found") is None]
+        lines = ["**📋 立创核验结果**：", ""]
+        for r in ok:
+            lines.append(f"- ✅ **{r['mpn']}**（{r['code']}） {r['desc']}")
+        for r in no:
+            lines.append(f"- ❌ {r['query']} —— 立创未找到，建议不要采用")
+        for r in err:
+            lines.append(f"- ⚠ {r['query']} —— 核验失败（{r['error']}），请自行到立创搜索确认")
+        self._md_log += "\n\n" + "\n".join(lines) + "\n"
+        self.chat.setMarkdown(self._md_log)
+        sb = self.chat.verticalScrollBar()
+        sb.setValue(sb.maximum())
+        if ok:
+            self._verified_codes = [r["code"] for r in ok if r.get("code")]
+            self.export_btn.setText(
+                f"⬇ 把 {len(self._verified_codes)} 个已核验编号填入「元件导出」")
+            self.export_btn.setVisible(bool(self._verified_codes))
+
+    def _send_verified(self):
+        if self._verified_codes:
+            self.send_to_export.emit(" ".join(self._verified_codes))
