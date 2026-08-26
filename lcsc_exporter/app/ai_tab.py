@@ -16,7 +16,8 @@ _TOOLS = os.path.join(
 if os.path.isdir(_TOOLS) and _TOOLS not in sys.path:
     sys.path.insert(0, _TOOLS)
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, Signal, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QTextBrowser, QVBoxLayout, QWidget,
@@ -86,10 +87,15 @@ class AIChatTab(QWidget):
         cfg.addWidget(QLabel("API Key:"))
         self.key_edit = QLineEdit()
         self.key_edit.setEchoMode(QLineEdit.Password)
-        self.key_edit.setPlaceholderText("sk-...（阿里云百炼 / DeepSeek 均可）")
+        self.key_edit.setPlaceholderText(
+            "用自己的 key（sk-...），没有就点右边「申请 Key」免费领")
         if config.get_api_key():
             self.key_edit.setText(config.get_api_key())
         cfg.addWidget(self.key_edit, 2)
+        get_key_btn = QPushButton("申请 Key")
+        get_key_btn.setToolTip("打开所选服务商的控制台，注册后免费创建 API Key")
+        get_key_btn.clicked.connect(self._open_key_page)
+        cfg.addWidget(get_key_btn)
 
         cfg.addWidget(QLabel("端点:"))
         self.preset_cb = QComboBox()
@@ -155,9 +161,22 @@ class AIChatTab(QWidget):
         mk = config.masked_key()
         self.status_lbl.setText(
             f"当前: {config.get_base_url()} | {config.get_model()} | "
-            + (f"Key 已配置（{mk}）" if mk else "⚠ 未配置 Key"))
+            + (f"Key 已配置（{mk}）" if mk
+               else "⚠ 未配置 Key（本工具不含任何 Key，请使用自己的）"))
         self.status_lbl.setStyleSheet(
             "color: gray" if mk else "color: #c0392b")
+
+    def _open_key_page(self):
+        """按所选端点打开对应服务商的 Key 申请页。"""
+        preset = self.preset_cb.currentData()
+        base = (preset[0] if preset else self.preset_cb.currentText()).lower()
+        if "dashscope" in base or "aliyun" in base:
+            url = "https://bailian.console.aliyun.com/?apiKey=1#/api-key"
+        elif "deepseek" in base:
+            url = "https://platform.deepseek.com/api_keys"
+        else:
+            url = "https://platform.deepseek.com/api_keys"
+        QDesktopServices.openUrl(QUrl(url))
 
     def _save(self):
         preset = self.preset_cb.currentData()
