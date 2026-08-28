@@ -18,3 +18,6 @@ Thumbs.db
 dist/
 .tools/innosetup/
 .tools/innosetup-installer.exe
+
+# 预览临时目录（正常即用即删，崩溃残留也不进仓库）
+lcsc_preview_*/

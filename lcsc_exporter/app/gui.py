@@ -346,6 +346,11 @@ class MainWindow(QWidget):
         self.open_dir_btn = QPushButton("打开输出目录")
         self.open_dir_btn.clicked.connect(self._open_out_dir)
         row3.addWidget(self.open_dir_btn)
+        self.preview_btn = QPushButton("预览符号/封装")
+        self.preview_btn.setToolTip("先抓取并画出该编号的原理图符号和 PCB 封装，"
+                                    "确认无误再导出；结果表里双击某行也可预览")
+        self.preview_btn.clicked.connect(self._preview_input)
+        row3.addWidget(self.preview_btn)
         self.export_btn = QPushButton("开始导出")
         self.export_btn.setDefault(True)
         self.export_btn.setMinimumWidth(140)
@@ -366,6 +371,9 @@ class MainWindow(QWidget):
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(
             ["编号", "MPN/描述", "产物文件", "状态"])
+        self.table.itemDoubleClicked.connect(
+            lambda item: self._start_preview(
+                self.table.item(item.row(), 0).text()))
         self.table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(
@@ -411,6 +419,42 @@ class MainWindow(QWidget):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
         if btn == QMessageBox.Yes:
             QDesktopServices.openUrl(QUrl(info["url"]))
+
+    # ---------- 符号/封装预览 ----------
+
+    def _preview_input(self):
+        codes = parse_codes(self.codes_edit.text())
+        if not codes:
+            self.statusBar.showMessage("请先输入 LCSC 元件编号再预览")
+            return
+        self._start_preview(codes[0])
+
+    def _start_preview(self, code: str):
+        if not code:
+            return
+        try:
+            from lcsc_exporter.app.preview import PreviewDialog, PreviewWorker
+        except Exception as e:  # noqa: BLE001
+            self.statusBar.showMessage(f"预览模块加载失败: {e}")
+            return
+        self.preview_btn.setEnabled(False)
+        self.preview_btn.setText("抓取中…")
+        self.statusBar.showMessage(f"正在抓取 {code} 的符号/封装数据…")
+        self._pv_worker = PreviewWorker(code, parent=self)
+        self._pv_worker.done.connect(
+            lambda sym, fp, err, c=code: self._on_preview(c, sym, fp, err))
+        self._pv_worker.start()
+
+    def _on_preview(self, code: str, sym_src, fp_src, err: str):
+        self.preview_btn.setEnabled(True)
+        self.preview_btn.setText("预览符号/封装")
+        if err:
+            self.statusBar.showMessage(f"预览失败: {err}")
+            QMessageBox.warning(self, "预览失败", f"{code}: {err}")
+            return
+        self.statusBar.showMessage(f"{code} 预览就绪")
+        from lcsc_exporter.app.preview import PreviewDialog
+        PreviewDialog(sym_src, fp_src, code, parent=self).exec()
 
     def _accept_ai_codes(self, codes: str):
         """AI 助手核验通过的编号 → 填入导出框并切回导出页签。"""
