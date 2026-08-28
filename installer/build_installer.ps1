@@ -17,7 +17,9 @@ if (-not (Test-Path $iscc)) {
     if (-not (Test-Path $iscc)) { throw "Inno Setup install failed" }
 }
 
-# 版本号从 Python 包读取，保证安装包与程序一致
+# Read version from the Python package so installer and app stay in sync.
+# NOTE: keep this file ASCII-only — PS 5.1 reads .ps1 as GBK and a mangled
+# trailing backtick in a Chinese comment can swallow the next line.
 $ver = (python -c "import sys; sys.path.insert(0,'.'); from lcsc_exporter import __version__; print(__version__)").Trim()
 if (-not $ver) { throw "Cannot read __version__" }
 Write-Host "Version: $ver"

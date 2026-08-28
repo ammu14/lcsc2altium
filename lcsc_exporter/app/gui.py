@@ -30,7 +30,7 @@ if os.path.isdir(_TOOLS) and _TOOLS not in sys.path:
     sys.path.insert(0, _TOOLS)
 
 try:
-    from PySide6.QtCore import QThread, Signal, QUrl
+    from PySide6.QtCore import QThread, QTimer, Signal, QUrl
     from PySide6.QtGui import QDesktopServices
     from PySide6.QtWidgets import (
         QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
@@ -62,7 +62,9 @@ except ImportError:
         QT_BINDING = "PyQt5"
 
 def workspace_root() -> str:
-    """工作区根目录（.../lcsc2altium），gui.py 位于 lcsc_exporter/app/ 下两级。"""
+    """工作区根目录。PyInstaller 冻结后 = exe 所在目录（npnp 等资源在 _internal/）。"""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -74,10 +76,15 @@ def find_npnp() -> str | None:
     再回退 PATH 里的 npnp。
     """
     root = workspace_root()
-    for c in (
+    candidates = [
         os.path.join(root, ".tools", "bin", "npnp.exe"),
         os.path.join(root, ".tools", "bin", "npnp"),
-    ):
+    ]
+    if getattr(sys, "frozen", False):
+        # PyInstaller onedir: add-data 落在 _internal/npnp/npnp.exe
+        candidates.insert(0, os.path.join(root, "_internal", "npnp", "npnp.exe"))
+        candidates.insert(1, os.path.join(root, "npnp", "npnp.exe"))
+    for c in candidates:
         if os.path.isfile(c):
             return c
     for pat in (
@@ -537,7 +544,14 @@ def main() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     w = MainWindow()
     w.show()
-    return app.exec()
+    code = app.exec()
+    # PyInstaller 冻结后解释器退出时 Qt DLL 卸载顺序会致崩（0xC0000409），
+    # 主动先销毁窗口与应用对象可规避；源码运行下同样安全。
+    w.close()
+    w.deleteLater()
+    app.processEvents()
+    del w
+    return code
 
 
 if __name__ == "__main__":

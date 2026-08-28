@@ -36,7 +36,7 @@ UninstallDisplayName={#AppName}
 Name: "chinesesimp"; MessagesFile: "ChineseSimplified.isl"
 
 [Files]
-Source: "..\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion; Excludes: ".git\*,out\*,__pycache__\*,*.pyc,ai_config.json,dist\*,installer\*,.tools\innosetup-installer.exe,.tools\innosetup\*,dl_inno*.py,probe_*.py,test_*.py"
+Source: "..\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion; Excludes: ".git\*,out\*,__pycache__\*,*.pyc,ai_config.json,dist\*,build\*,wheels\*,installer\*,.tools\innosetup-installer.exe,.tools\innosetup\*,.tools\pybuild\*,dl_inno*.py,probe_*.py,test_*.py,*.spec,lcsc_preview_*\*,.dsh-vision-router\*"
 
 [Icons]
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\lcsc2altium_gui.pyw"; WorkingDir: "{app}"

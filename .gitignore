@@ -16,11 +16,15 @@ Thumbs.db
 
 # 安装包构建（本地工具与产物，不进仓库）
 dist/
+build/
+*.spec
+wheels/
 .tools/innosetup/
 .tools/innosetup-installer.exe
+.tools/pybuild/
 
 # 预览临时目录（正常即用即删，崩溃残留也不进仓库）
 lcsc_preview_*/
 
-# �Ӿ���������ʱ����
+# 视觉工具运行时产物
 .dsh-vision-router/

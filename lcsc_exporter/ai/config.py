@@ -10,9 +10,18 @@ import os
 
 from .client import DEFAULT_BASE_URL, DEFAULT_MODEL
 
-_CONFIG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "ai_config.json")
+import sys
+
+
+def _config_dir() -> str:
+    """冻结（PyInstaller）时用 exe 所在目录；否则用工作区根目录。"""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))))
+
+
+_CONFIG_PATH = os.path.join(_config_dir(), "ai_config.json")
 
 
 def load_config() -> dict:
