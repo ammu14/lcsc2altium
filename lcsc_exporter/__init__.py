@@ -12,4 +12,5 @@
   - yycx2016/npnp  https://github.com/yycx2016/npnp
 """
 
-__version__ = "0.2.0"
+__version__ = "1.1.0"
+GITHUB_REPO = "ammu14/lcsc2altium"

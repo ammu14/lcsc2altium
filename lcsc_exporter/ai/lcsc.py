@@ -59,9 +59,49 @@ def search(keyword: str, timeout: float = 10.0) -> list[dict]:
     return data.get("result") or []
 
 
-def verify(mpn: str, timeout: float = 10.0) -> dict:
-    """核验单个型号。返回 {query, found, mpn?, code?, desc?, error?}。
+_MALL_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/120.0.0.0 Safari/537.36"),
+    "Accept-Language": "zh-CN,zh;q=0.9",
+    "Referer": "https://www.szlcsc.com/",
+}
 
+
+def _fetch_mall_info(datasheet_url: str, timeout: float = 8.0) -> dict:
+    """从立创商城详情页抓 库存/单价（EDA API 没有这两个字段）。
+
+    datasheet_url 形如 https://item.szlcsc.com/datasheet/{MPN}/{数字id}.html；
+    详情页 HTML 内嵌 "stockNumber":N 和 JSON-LD "price":X。失败静默返回 {}。
+    """
+    m = re.search(r"item\.szlcsc\.com/(?:datasheet/[^/]+/)?(\d+)\.html",
+                  datasheet_url or "")
+    if not m:
+        return {}
+    try:
+        req = urllib.request.Request(
+            f"https://item.szlcsc.com/{m.group(1)}.html", headers=_MALL_HEADERS)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read().decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 — 商城页失败不阻塞核验主流程
+        return {}
+    info: dict = {}
+    ms = re.search(r'"stockNumber":\s*(\d+)', body)
+    if ms:
+        info["stock"] = int(ms.group(1))
+    mp = re.search(r'"price":\s*([\d.]+)\s*,\s*"priceCurrency":\s*"CNY"', body)
+    if not mp:  # 有的页面 price 在 currency 后面
+        mp = re.search(r'"priceCurrency":\s*"CNY"[^}]*?"price":\s*([\d.]+)', body)
+    if mp:
+        info["price"] = float(mp.group(1))
+    return info
+
+
+def verify(mpn: str, timeout: float = 10.0, with_mall: bool = True) -> dict:
+    """核验单个型号。
+
+    返回 {query, found, mpn?, code?, desc?, manufacturer?, footprint?,
+          basic?, datasheet?, stock?, price?, error?}
     found: True=立创有, False=没有, None=查询失败（网络问题，不算不存在）。
     """
     try:
@@ -74,7 +114,16 @@ def verify(mpn: str, timeout: float = 10.0) -> dict:
         base = re.sub(r"_C\d+$", "", title)      # 剥掉 "_C6186" 后缀
         nt = _norm(base)
         if nt and (nt == nq or nt.startswith(nq) or nq.startswith(nt)):
-            return {"query": mpn, "found": True, "mpn": base,
-                    "code": str(r.get("product_code") or ""),
-                    "desc": str(r.get("title") or "")[:60]}
+            attrs = r.get("attributes") or {}
+            out = {"query": mpn, "found": True, "mpn": base,
+                   "code": str(r.get("product_code") or ""),
+                   "desc": str(r.get("title") or "")[:60],
+                   "manufacturer": str(attrs.get("Manufacturer") or ""),
+                   "footprint": str(attrs.get("Supplier Footprint") or ""),
+                   "basic": str(attrs.get("JLCPCB Part Class") or "")
+                            .lower().startswith("basic"),
+                   "datasheet": str(attrs.get("Datasheet") or "")}
+            if with_mall:
+                out.update(_fetch_mall_info(out["datasheet"], timeout=8.0))
+            return out
     return {"query": mpn, "found": False}

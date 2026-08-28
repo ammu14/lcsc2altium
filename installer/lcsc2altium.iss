@@ -8,7 +8,11 @@
 ;   - 不打包: .git / out / __pycache__ / ai_config.json（用户本机密钥）/ 安装器自身
 
 #define AppName      "LCSC 元件导出器"
-#define AppVersion   "1.1.0"
+; 版本号唯一来源是 lcsc_exporter/__init__.py 的 __version__；
+; build_installer.ps1 用 /DAppVersion= 传入，这里只是手动编译时的兜底。
+#ifndef AppVersion
+  #define AppVersion "1.1.0"
+#endif
 #define AppPublisher "lcsc2altium"
 #define AppId        "{{7F3A2B1C-9D4E-4A5F-B8C6-2E1D0F9A8B7C}"
 

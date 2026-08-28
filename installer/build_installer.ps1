@@ -17,7 +17,12 @@ if (-not (Test-Path $iscc)) {
     if (-not (Test-Path $iscc)) { throw "Inno Setup install failed" }
 }
 
+# 版本号从 Python 包读取，保证安装包与程序一致
+$ver = (python -c "import sys; sys.path.insert(0,'.'); from lcsc_exporter import __version__; print(__version__)").Trim()
+if (-not $ver) { throw "Cannot read __version__" }
+Write-Host "Version: $ver"
+
 Write-Host "Compiling installer ..."
-& $iscc "installer\lcsc2altium.iss"
+& $iscc "/DAppVersion=$ver" "installer\lcsc2altium.iss"
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
 Write-Host "Done. See dist\ folder."

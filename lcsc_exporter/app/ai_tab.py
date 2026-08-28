@@ -256,7 +256,21 @@ class AIChatTab(QWidget):
         err = [r for r in results if r.get("found") is None]
         lines = ["**📋 立创核验结果**：", ""]
         for r in ok:
-            lines.append(f"- ✅ **{r['mpn']}**（{r['code']}） {r['desc']}")
+            parts = [f"**{r['mpn']}**（{r['code']}）"]
+            if r.get("manufacturer"):
+                parts.append(r["manufacturer"])
+            if r.get("footprint"):
+                parts.append(r["footprint"])
+            if r.get("basic"):
+                parts.append("基础库·贴片免换料费")
+            if r.get("stock") is not None:
+                parts.append(f"库存 {r['stock']:,}")
+            if r.get("price") is not None:
+                parts.append(f"¥{r['price']:g}")
+            line = "- ✅ " + " · ".join(parts)
+            if r.get("datasheet"):
+                line += f"　[📄 数据手册]({r['datasheet']})"
+            lines.append(line)
         for r in no:
             lines.append(f"- ❌ {r['query']} —— 立创未找到，建议不要采用")
         for r in err:

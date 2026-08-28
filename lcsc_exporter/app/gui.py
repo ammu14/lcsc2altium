@@ -34,7 +34,7 @@ try:
     from PySide6.QtGui import QDesktopServices
     from PySide6.QtWidgets import (
         QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
-        QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QProgressBar,
+        QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
         QPushButton, QSplitter, QStatusBar, QTabWidget, QTableWidget,
         QTableWidgetItem, QVBoxLayout, QWidget,
     )
@@ -45,7 +45,7 @@ except ImportError:
         from PyQt6.QtGui import QDesktopServices
         from PyQt6.QtWidgets import (
             QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
-            QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QProgressBar,
+            QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
             QPushButton, QSplitter, QStatusBar, QTabWidget, QTableWidget,
             QTableWidgetItem, QVBoxLayout, QWidget,
         )
@@ -55,7 +55,7 @@ except ImportError:
         from PyQt5.QtGui import QDesktopServices
         from PyQt5.QtWidgets import (
             QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
-            QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QProgressBar,
+            QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
             QPushButton, QSplitter, QStatusBar, QTabWidget, QTableWidget,
             QTableWidgetItem, QVBoxLayout, QWidget,
         )
@@ -284,6 +284,18 @@ class ExportWorker(QThread):
         self.all_done.emit(ok, len(self.codes))
 
 
+class _UpdateWorker(QThread):
+    """启动后后台检查 GitHub 新版本；无新版/无网 → emit None（静默）。"""
+    done = Signal(object)
+
+    def run(self):
+        try:
+            from lcsc_exporter.app import update
+            self.done.emit(update.check_newer())
+        except Exception:  # noqa: BLE001 — 更新检查永远不许炸 GUI
+            self.done.emit(None)
+
+
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -382,6 +394,23 @@ class MainWindow(QWidget):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(tabs)
+
+        # 启动后后台检查新版本（无网/无新版都静默）
+        self._upd = _UpdateWorker(self)
+        self._upd.done.connect(self._on_update_result)
+        self._upd.start()
+
+    def _on_update_result(self, info):
+        if not info:
+            return
+        from lcsc_exporter import __version__
+        btn = QMessageBox.information(
+            self, "发现新版本",
+            f"当前版本 v{__version__}，GitHub 已发布新版本 v{info['version']}。\n\n"
+            "是否打开发布页下载安装包？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if btn == QMessageBox.Yes:
+            QDesktopServices.openUrl(QUrl(info["url"]))
 
     def _accept_ai_codes(self, codes: str):
         """AI 助手核验通过的编号 → 填入导出框并切回导出页签。"""
