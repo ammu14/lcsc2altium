@@ -118,6 +118,7 @@ description: 立创商城（LCSC）元件编号 → 各 EDA（Altium/KiCad）可
 ## 5. Altium 侧要点（npnp 直出，仅作背景）
 
 - `.SchLib`/`.PcbLib` = **CFBF (OLE2) 复合文档**，major version 4 = 4096 字节扇区；<4096 的流必须走 mini-stream；目录项须按 (名称长度, 不区分大小写名称) BST 排序，否则 ole32 拒绝打开
+- **AD16 及更早版本打不开 v4 容器**（只认 v3/512B 扇区）→ `convert/cfbf.py` 把 npnp 产物无损重写为 v3：读 v4 全部流（含嵌套 storage）→ 重建 v3（目录/miniFAT/miniStream/大流/FAT/DIFAT 布局，流数据逐字节不变）；验证 = 往返一致 + ole32 StgOpenStorage 可开
 - 记录 = `4字节LE长度 + |KEY=VALUE|...|` ASCII 文本；中文走 `%UTF8%` 前缀字段
 - `.PcbLib` 的 `Library/Models/0` 流内嵌完整 STEP（~MB 级）→ AD 的"3D 绑定"是真内嵌
 - 验证手段：Windows ole32 API（StgOpenStorageEx / OpenStream mode=STGM_SHARE_EXCLUSIVE=0x10）

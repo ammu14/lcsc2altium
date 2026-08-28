@@ -199,7 +199,12 @@ class ExportWorker(QThread):
         self._run_npnp(npnp, self._npnp_args(sub, code, subdir))
 
     def _export_altium(self, npnp: str, code: str, subdir: str, r: dict) -> None:
-        """AD 三件套: .SchLib + .PcbLib（3D 已内嵌）+ 独立 .step。"""
+        """AD 三件套: .SchLib + .PcbLib（3D 已内嵌）+ 独立 .step。
+
+        npnp 写的是 CFBF v4 容器（4096B 扇区），AD16 及更早版本打不开；
+        这里无损重写为 v3 容器（512B 扇区），新老 AD 通吃。
+        """
+        from lcsc_exporter.convert.cfbf import convert_file_to_v3
         files: list[str] = r["files"]
         for sub, ext in (("export-schlib", "SchLib"),
                          ("export-pcblib", "PcbLib")):
@@ -207,6 +212,11 @@ class ExportWorker(QThread):
             m = glob.glob(os.path.join(subdir, f"*.{ext}"))
             if not m:
                 raise RuntimeError(f"{ext} 未生成")
+            try:
+                convert_file_to_v3(m[0])
+                self.log.emit(f"   {ext} 已重写为 v3 容器（兼容 AD16 等老版本）")
+            except Exception as e:  # noqa: BLE001 — 失败不阻断，新 AD 可读 v4
+                r["warnings"].append(f"{ext} v3 兼容转换失败: {e}")
             files.append(os.path.basename(m[0]))
         try:
             self._sub(npnp, "download-step", code, subdir)
