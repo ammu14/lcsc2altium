@@ -117,10 +117,11 @@ def _query_variants(mpn: str) -> list[str]:
             break
         cur = nxt
         out.append(cur)
-    # 再补一个"截到最后一个数字"的基型号变体：TPS5430DDAR → TPS5430
-    base = re.sub(r"[A-Za-z]+$", "", out[-1])
-    if base != out[-1] and len(base) >= 4:
-        out.append(base)
+    # 再补一个"字母+数字核心"的基型号变体（用于同家族提示）：
+    #   LM5164QPWPRQ1 → LM5164，XC6206P332MR → XC6206，TPS5430DDAR → TPS5430
+    m = re.match(r"[A-Za-z]{1,5}\d{2,5}", out[-1])
+    if m and m.group(0) != out[-1]:
+        out.append(m.group(0))
     seen, variants = set(), []
     for v in out:
         if len(v) >= 4 and v not in seen:
@@ -187,7 +188,19 @@ def verify(mpn: str, timeout: float = 10.0, with_mall: bool = True) -> dict:
             out.update(_fetch_mall_info(out["datasheet"], timeout=8.0))
         return out
 
-    # 3) 没找到：附上 API 返回的最接近候选，供用户人工确认
+    # 3) 没找到：优先给"同家族"候选（基型号前缀命中，如 LM5164QPWPRQ1
+    #    没有但 LM5164DDAR 有——硅片相同封装不同，可人工替代）；
+    #    否则附上 API 返回的最接近候选，供用户人工确认。
+    family: list[str] = []
+    base_m = re.match(r"[A-Za-z]{1,5}\d{2,5}", mpn)
+    if base_m and base_m.group(0) != mpn:
+        nb = _norm(base_m.group(0))
+        for r in pool.values():
+            t = re.sub(r"_C\d+$", "", str(r.get("display_title") or ""))
+            if t and _norm(t).startswith(nb) and t not in family:
+                family.append(t)
+    if family:
+        return {"query": mpn, "found": False, "family": family[:4]}
     hints = [re.sub(r"_C\d+$", "", str(r.get("display_title") or ""))
              for r in list(pool.values())[:3]]
     return {"query": mpn, "found": False,

@@ -274,8 +274,13 @@ class AIChatTab(QWidget):
                 line += f"　[📄 数据手册]({r['datasheet']})"
             lines.append(line)
         for r in no:
+            family = "、".join(r.get("family") or [])
             hints = "、".join(r.get("hints") or [])
-            if hints:
+            if family:
+                lines.append(f"- ❌ {r['query']} —— 立创 EDA 库无此型号；"
+                             f"**同家族可选：{family}**（硅片相同，封装可能不同，"
+                             "可替代使用）")
+            elif hints:
                 lines.append(f"- ❌ {r['query']} —— 立创 EDA 库未找到该型号"
                              f"（最接近：{hints}，请确认是否笔误）")
             else:
