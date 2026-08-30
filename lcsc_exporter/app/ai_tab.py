@@ -125,7 +125,9 @@ class AIChatTab(QWidget):
 
         # --- 聊天显示 ---
         self.chat = QTextBrowser()
-        self.chat.setOpenExternalLinks(False)
+        # 数据手册等外链交给系统浏览器打开；QTextBrowser 自己导航 PDF
+        # 会渲染失败变成一片空白（还会把聊天记录顶掉）
+        self.chat.setOpenExternalLinks(True)
         root.addWidget(self.chat, 1)
 
         # --- 输入行 ---
