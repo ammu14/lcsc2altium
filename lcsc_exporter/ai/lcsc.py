@@ -29,8 +29,13 @@ def _norm(s: str) -> str:
     return re.sub(r"[-_.\s]", "", s).upper()
 
 
+# AI 回复里的全角符号会打断 token（如 MP2307－LF），先归一成半角
+_FULLWIDTH = str.maketrans("－—–／．：；（）", "---/.::()")
+
+
 def extract_candidates(text: str, limit: int = 8) -> list[str]:
     """从 AI 回复里抽出疑似型号（MPN）的 token，优先取 **加粗** 的。"""
+    text = text.translate(_FULLWIDTH)
     ordered: list[str] = []
     bold = [t.strip("*") for t in _BOLD_RE.findall(text)]
     for tok in bold + _TOKEN_RE.findall(text):
@@ -97,33 +102,93 @@ def _fetch_mall_info(datasheet_url: str, timeout: float = 8.0) -> dict:
     return info
 
 
+def _query_variants(mpn: str) -> list[str]:
+    """为查询生成逐步放宽的关键词变体。
+
+    AI 给的型号可能带包装/环保后缀（-LF-Z、/NOPB、-TR）或是完整料号，
+    立创 EDA 的 wd= 搜索对这些敏感，所以逐层剥后缀重试：
+      MP2307DN-LF-Z → MP2307DN-LF → MP2307DN → MP2307
+    """
+    out = [mpn]
+    cur = mpn
+    while True:
+        nxt = re.sub(r"[-/][A-Za-z0-9.]+$", "", cur)   # 剥最后一段 -xx 或 /xx
+        if nxt == cur:
+            break
+        cur = nxt
+        out.append(cur)
+    # 再补一个"截到最后一个数字"的基型号变体：TPS5430DDAR → TPS5430
+    base = re.sub(r"[A-Za-z]+$", "", out[-1])
+    if base != out[-1] and len(base) >= 4:
+        out.append(base)
+    seen, variants = set(), []
+    for v in out:
+        if len(v) >= 4 and v not in seen:
+            seen.add(v)
+            variants.append(v)
+    return variants
+
+
+def _match_score(query_norm: str, title_norm: str) -> int:
+    """归一化后的匹配强度：3=完全相等 2=互为前缀 1=互相包含 0=不像。"""
+    if not title_norm or not query_norm:
+        return 0
+    if title_norm == query_norm:
+        return 3
+    if title_norm.startswith(query_norm) or query_norm.startswith(title_norm):
+        return 2
+    if query_norm in title_norm or title_norm in query_norm:
+        return 1
+    return 0
+
+
 def verify(mpn: str, timeout: float = 10.0, with_mall: bool = True) -> dict:
     """核验单个型号。
 
     返回 {query, found, mpn?, code?, desc?, manufacturer?, footprint?,
-          basic?, datasheet?, stock?, price?, error?}
-    found: True=立创有, False=没有, None=查询失败（网络问题，不算不存在）。
+          basic?, datasheet?, stock?, price?, hints?, error?}
+    found: True=EDA 库有, False=EDA 库没有（商城可能有售但无库可导出）,
+           None=查询失败（网络问题，不算不存在）。
     """
-    try:
-        results = search(mpn, timeout)
-    except Exception as e:  # noqa: BLE001 — 网络问题如实上报
-        return {"query": mpn, "found": None, "error": f"{type(e).__name__}: {e}"}
+    # 1) 多关键词重试，汇拢所有候选
+    pool: dict[str, dict] = {}
+    for kw in _query_variants(mpn):
+        try:
+            for r in search(kw, timeout):
+                code = str(r.get("product_code") or id(r))
+                pool.setdefault(code, r)
+        except Exception as e:  # noqa: BLE001 — 网络问题如实上报
+            return {"query": mpn, "found": None,
+                    "error": f"{type(e).__name__}: {e}"}
+
+    # 2) 打分排序：精确 > 前缀 > 包含；同分取标题更短者（更贴近基型号，
+    #    天然把 MS/TP/HS 前缀的仿制料排到原厂料后面）
     nq = _norm(mpn)
-    for r in results:
-        title = str(r.get("display_title") or "")
-        base = re.sub(r"_C\d+$", "", title)      # 剥掉 "_C6186" 后缀
-        nt = _norm(base)
-        if nt and (nt == nq or nt.startswith(nq) or nq.startswith(nt)):
-            attrs = r.get("attributes") or {}
-            out = {"query": mpn, "found": True, "mpn": base,
-                   "code": str(r.get("product_code") or ""),
-                   "desc": str(r.get("title") or "")[:60],
-                   "manufacturer": str(attrs.get("Manufacturer") or ""),
-                   "footprint": str(attrs.get("Supplier Footprint") or ""),
-                   "basic": str(attrs.get("JLCPCB Part Class") or "")
-                            .lower().startswith("basic"),
-                   "datasheet": str(attrs.get("Datasheet") or "")}
-            if with_mall:
-                out.update(_fetch_mall_info(out["datasheet"], timeout=8.0))
-            return out
-    return {"query": mpn, "found": False}
+    scored = []
+    for r in pool.values():
+        base = re.sub(r"_C\d+$", "", str(r.get("display_title") or ""))
+        s = _match_score(nq, _norm(base))
+        if s:
+            scored.append((-s, len(base), base, r))
+    scored.sort(key=lambda t: (t[0], t[1]))
+
+    if scored:
+        _, _, base, r = scored[0]
+        attrs = r.get("attributes") or {}
+        out = {"query": mpn, "found": True, "mpn": base,
+               "code": str(r.get("product_code") or ""),
+               "desc": str(r.get("title") or "")[:60],
+               "manufacturer": str(attrs.get("Manufacturer") or ""),
+               "footprint": str(attrs.get("Supplier Footprint") or ""),
+               "basic": str(attrs.get("JLCPCB Part Class") or "")
+                        .lower().startswith("basic"),
+               "datasheet": str(attrs.get("Datasheet") or "")}
+        if with_mall:
+            out.update(_fetch_mall_info(out["datasheet"], timeout=8.0))
+        return out
+
+    # 3) 没找到：附上 API 返回的最接近候选，供用户人工确认
+    hints = [re.sub(r"_C\d+$", "", str(r.get("display_title") or ""))
+             for r in list(pool.values())[:3]]
+    return {"query": mpn, "found": False,
+            "hints": [h for h in hints if h]}
