@@ -124,12 +124,14 @@ class ExportWorker(QThread):
     all_done = Signal(int, int)  # ok, total
 
     def __init__(self, codes: list[str], outdir: str,
-                 target: str, force: bool, parent=None):
+                 target: str, force: bool, merge_name: str = "",
+                 parent=None):
         super().__init__(parent)
         self.codes = codes
         self.outdir = outdir
         self.target = target
         self.force = force
+        self.merge_name = merge_name   # 非空 = 全部导完后合并成单一库文件
 
     def _npnp_args(self, sub: str, code: str, subdir: str) -> list[str]:
         args = [sub, code, "--output", subdir]
@@ -157,30 +159,32 @@ class ExportWorker(QThread):
         m = glob.glob(os.path.join(subdir, f"*.{ext}"))
         return os.path.basename(m[0]) if m else ""
 
-    def _rename_to_mpn(self, subdir: str, code: str, mpn: str) -> None:
-        """导出完成后把 out/{编号}/ 重命名为 out/{型号}/。
+    def _rename_to_mpn(self, subdir: str, code: str, mpn: str) -> str:
+        """导出完成后把 out/{编号}/ 重命名为 out/{型号}/，返回最终目录。
 
         型号含 Windows 非法字符时替换为 _；目标目录已存在时回退为
         {型号}_{编号}；仍冲突或重命名失败则保留原编号目录（仅告警）。
         """
         name = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", mpn).strip(" .")
         if not name:
-            return
+            return subdir
         target = os.path.join(self.outdir, name)
         if os.path.normcase(os.path.abspath(target)) == \
                 os.path.normcase(os.path.abspath(subdir)):
-            return
+            return subdir
         if os.path.exists(target):
             target = os.path.join(self.outdir, f"{name}_{code}")
         if os.path.exists(target):
             self.log.emit(f"[warn] 目录 {os.path.basename(target)}/ 已存在，"
                           f"保留 {code}/")
-            return
+            return subdir
         try:
             os.rename(subdir, target)
             self.log.emit(f"输出目录: {code}/ → {os.path.basename(target)}/")
+            return target
         except OSError as e:
             self.log.emit(f"[warn] 目录重命名失败，保留 {code}/: {e}")
+            return subdir
 
     # 目录命名优先级: 从产物文件名推断元件型号（保留 MPN 原始大小写的优先）
     _MPN_SUFFIXES = (".SchLib", ".kicad_sym", "_symbol_easyeda.json",
@@ -273,6 +277,47 @@ class ExportWorker(QThread):
         else:
             self._export_altium(npnp, code, subdir, r)
 
+    def _merge_all(self, part_dirs: list[str]) -> None:
+        """批量导完后合并成单一库文件（失败只告警，不影响分元件产物）。"""
+        from lcsc_exporter.convert import libmerge
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_",
+                      self.merge_name).strip(" .") or "MergedLib"
+        merged: list[str] = []
+        try:
+            if self.target == "altium":
+                sch = [m for d in part_dirs
+                       for m in glob.glob(os.path.join(d, "*.SchLib"))]
+                pcb = [m for d in part_dirs
+                       for m in glob.glob(os.path.join(d, "*.PcbLib"))]
+                if sch:
+                    out = os.path.join(self.outdir, f"{name}.SchLib")
+                    n = libmerge.merge_schlib(sch, out)
+                    merged.append(f"{name}.SchLib（{n} 个符号）")
+                if pcb:
+                    out = os.path.join(self.outdir, f"{name}.PcbLib")
+                    n = libmerge.merge_pcblib(pcb, out)
+                    merged.append(f"{name}.PcbLib（{n} 个封装，3D 已合并内嵌）")
+            else:
+                syms = [m for d in part_dirs
+                        for m in glob.glob(os.path.join(d, "*.kicad_sym"))]
+                prettys = [m for d in part_dirs
+                           for m in glob.glob(os.path.join(d, "*.pretty"))
+                           if os.path.isdir(m)]
+                if syms or prettys:
+                    out_sym = os.path.join(self.outdir, f"{name}.kicad_sym")
+                    out_pp = os.path.join(self.outdir, f"{name}.pretty")
+                    ns, nf = libmerge.merge_kicad(syms, prettys,
+                                                  out_sym, out_pp)
+                    merged.append(f"{name}.kicad_sym（{ns} 个符号）")
+                    merged.append(f"{name}.pretty/（{nf} 个封装）")
+        except Exception as e:  # noqa: BLE001 — 合并失败不丢分元件产物
+            self.log.emit(f"[warn] 合并库失败: {e}")
+            return
+        if merged:
+            self.log.emit("✅ 合并库已生成: " + "；".join(merged))
+            self.item_done.emit({"code": "—", "mpn": f"合并库 {name}",
+                                 "files": merged, "warnings": []})
+
     def run(self):
         npnp = find_npnp()
         if not npnp:
@@ -282,6 +327,7 @@ class ExportWorker(QThread):
         self.log.emit(f"使用 npnp: {npnp}")
         self.log.emit(f"导出目标: {TARGETS.get(self.target, self.target)}\n")
         ok = 0
+        part_dirs: list[str] = []
         for i, code in enumerate(self.codes, 1):
             self.log.emit(f"--- [{i}/{len(self.codes)}] {code} ---")
             subdir = os.path.join(self.outdir, code)
@@ -292,12 +338,17 @@ class ExportWorker(QThread):
                 if not r["files"]:
                     raise RuntimeError("未生成任何文件")
                 r["mpn"] = self._derive_mpn(r["files"])
-                self._rename_to_mpn(subdir, code, r["mpn"])
+                final = self._rename_to_mpn(subdir, code, r["mpn"])
+                r["dir"] = final
+                part_dirs.append(final)
                 ok += 1
             except Exception as e:  # noqa: BLE001 — GUI 需兜底一切异常
                 r["error"] = str(e)
                 self.log.emit(f"[ERROR] {code}: {e}")
             self.item_done.emit(r)
+        if self.merge_name and part_dirs:
+            self.log.emit(f"\n--- 合并为单一库文件: {self.merge_name} ---")
+            self._merge_all(part_dirs)
         self.all_done.emit(ok, len(self.codes))
 
 
@@ -359,6 +410,17 @@ class MainWindow(QWidget):
         row3 = QHBoxLayout()
         self.force_cb = QCheckBox("强制重新抓取数据")
         row3.addWidget(self.force_cb)
+        self.merge_cb = QCheckBox("合并为单一库文件")
+        self.merge_cb.setChecked(True)
+        self.merge_cb.setToolTip(
+            "批量导出后，把所有元件合并成一个库文件（AD: 合并.SchLib/.PcbLib"
+            "；KiCad: 合并.kicad_sym + .pretty），导入 EDA 一次搞定")
+        row3.addWidget(self.merge_cb)
+        self.merge_name = QLineEdit("MergedLib")
+        self.merge_name.setMaximumWidth(110)
+        self.merge_name.setToolTip("合并库文件名（不含扩展名）")
+        self.merge_cb.toggled.connect(self.merge_name.setEnabled)
+        row3.addWidget(self.merge_name)
         row3.addStretch(1)
         self.open_dir_btn = QPushButton("打开输出目录")
         self.open_dir_btn.clicked.connect(self._open_out_dir)
@@ -511,9 +573,12 @@ class MainWindow(QWidget):
         self.export_btn.setEnabled(False)
         out = self.out_edit.text().strip() or "out"
         self._log(f"开始导出 {len(codes)} 个元件 → {out}（目标: {TARGETS[target]}）\n")
+        merge = (self.merge_name.text().strip()
+                 if self.merge_cb.isChecked() else "")
         self._worker = ExportWorker(codes, out,
                                     target=target,
                                     force=self.force_cb.isChecked(),
+                                    merge_name=merge,
                                     parent=self)
         self._worker.log.connect(self._log)
         self._worker.item_done.connect(self._item_done)

@@ -122,6 +122,8 @@ description: 立创商城（LCSC）元件编号 → 各 EDA（Altium/KiCad）可
 - 记录 = `4字节LE长度 + |KEY=VALUE|...|` ASCII 文本；中文走 `%UTF8%` 前缀字段
 - `.PcbLib` 的 `Library/Models/0` 流内嵌完整 STEP（~MB 级）→ AD 的"3D 绑定"是真内嵌
 - 验证手段：Windows ole32 API（StgOpenStorageEx / OpenStream mode=STGM_SHARE_EXCLUSIVE=0x10）
+- **CFBF 目录项名上限 31 个 UTF-16 字符**（64B 含 null），超长封装名必须截断且保留 null；npnp 原件行为 = storage 名截断、Parameters 的 PATTERN 和 Library/Data 尾部名单保留全名
+- **库合并**（`convert/libmerge.py`）：SchLib = 并 FileHeader 注册表（LIBREFi/COMPDESCRi/PARTCOUNTi/COMPCOUNT 重排、WEIGHT 求和）+ 组件 storage 原样搬；PcbLib = 搬组件 storage + Models 重编号（记录与流同序追加，模型靠 GUID 引用故无需改组件）+ 重建尾部名单（u32 总数 + 每条 [u32 名长+1, u8 名长, 名字节]）+ Models/Header = u32 模型计数
 
 ## 6. GUI 集成模式（PySide6）
 

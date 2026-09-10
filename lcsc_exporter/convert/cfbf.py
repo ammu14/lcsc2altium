@@ -302,9 +302,11 @@ def write_cfbf_v3(path: str, root: Entry) -> None:
     dirbuf = bytearray()
     for i, e in enumerate(flat):
         ent = bytearray(128)
-        nm = e.name.encode("utf-16-le") + b"\x00\x00"
-        ent[:len(nm)] = nm[:64]
-        struct.pack_into("<H", ent, 64, min(len(nm), 64))
+        # 目录项名称字段固定 64 字节 = 31 个 UTF-16 字符 + null（MS-CFB）。
+        # 超长必须截断到 31 字符并保留 null，否则严格读取器会拒。
+        nm = e.name[:31].encode("utf-16-le", "replace") + b"\x00\x00"
+        ent[:len(nm)] = nm
+        struct.pack_into("<H", ent, 64, len(nm))
         ent[66] = e.type
         ent[67] = 1  # black
         struct.pack_into("<I", ent, 68, getattr(e, "_left", FREE))
