@@ -26,5 +26,9 @@ wheels/
 # 预览临时目录（正常即用即删，崩溃残留也不进仓库）
 lcsc_preview_*/
 
+# 本地调试脚本与实验材料（不进仓库）
+dbg_*
+out_*/
+
 # 视觉工具运行时产物
 .dsh-vision-router/

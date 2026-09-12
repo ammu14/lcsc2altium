@@ -132,6 +132,7 @@ class ExportWorker(QThread):
         self.target = target
         self.force = force
         self.merge_name = merge_name   # 非空 = 全部导完后合并成单一库文件
+        self.merged_files: list[str] = []   # 合并产物绝对路径（给总结用）
 
     def _npnp_args(self, sub: str, code: str, subdir: str) -> list[str]:
         args = [sub, code, "--output", subdir]
@@ -315,6 +316,12 @@ class ExportWorker(QThread):
             return
         if merged:
             self.log.emit("✅ 合并库已生成: " + "；".join(merged))
+            for m in merged:
+                fname = m.split("（")[0].rstrip("/")
+                self.merged_files.append(
+                    os.path.abspath(os.path.join(self.outdir, fname)))
+            for p in self.merged_files:
+                self.log.emit(f"   📦 {p}")
             self.item_done.emit({"code": "—", "mpn": f"合并库 {name}",
                                  "files": merged, "warnings": []})
 
@@ -342,6 +349,9 @@ class ExportWorker(QThread):
                 r["dir"] = final
                 part_dirs.append(final)
                 ok += 1
+                self.log.emit(f"✅ {code}（{r['mpn']}）导出完成，产物：")
+                for f in r["files"]:
+                    self.log.emit(f"   {os.path.abspath(os.path.join(final, f))}")
             except Exception as e:  # noqa: BLE001 — GUI 需兜底一切异常
                 r["error"] = str(e)
                 self.log.emit(f"[ERROR] {code}: {e}")
@@ -596,7 +606,10 @@ class MainWindow(QWidget):
         mpn = r.get("mpn", "")
         cell(1, mpn, mpn)
         files = r.get("files", [])
-        cell(2, "; ".join(files), "\n".join(files))
+        d = r.get("dir")
+        tips = [os.path.abspath(os.path.join(d, f)) for f in files] \
+            if d else files
+        cell(2, "; ".join(files), "\n".join(tips))
         if r.get("error"):
             cell(3, "失败", r["error"])
         else:
@@ -607,12 +620,19 @@ class MainWindow(QWidget):
     def _all_done(self, ok: int, total: int):
         self.progress.setVisible(False)
         self.export_btn.setEnabled(True)
+        merged = list(getattr(self._worker, "merged_files", []) or [])
         self._worker = None
         self.statusBar.showMessage(f"完成: {ok}/{total}")
         out = self.out_edit.text().strip() or "out"
-        self._log(f"\n完成: {ok}/{total}，输出目录: {os.path.abspath(out)}")
-        self._log("提示: AD 目标出 .SchLib/.PcbLib；KiCad 目标出 .kicad_sym/.kicad_mod"
-                  "（含 STEP 3D 关联），复制进对应库目录即可使用。")
+        self._log(f"\n{'=' * 46}")
+        self._log(f"完成: {ok}/{total}")
+        self._log(f"📁 输出目录: {os.path.abspath(out)}")
+        if merged:
+            self._log("📦 合并库（直接导入 EDA 用这套）:")
+            for p in merged:
+                self._log(f"   {p}")
+        self._log("提示: 每个元件的单独产物在 输出目录\\{型号}\\ 下；"
+                  "悬停结果表「产物文件」列可看完整路径。")
 
 
 def main() -> int:
