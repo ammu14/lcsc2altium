@@ -30,5 +30,8 @@ lcsc_preview_*/
 dbg_*
 out_*/
 
+# 发布脚本（运行时读本机 git 凭据，绝不入库）
+installer/publish_release.*
+
 # 视觉工具运行时产物
 .dsh-vision-router/

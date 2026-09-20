@@ -133,7 +133,20 @@ description: 立创商城（LCSC）元件编号 → 各 EDA（Altium/KiCad）可
 - 目录命名：导出时先落 `out/{编号}/`，完成后按产物文件名推断 MPN 重命名为 `out/{型号}/`；非法字符→`_`，冲突→`{型号}_{编号}`
 - Qt 绑定自动适配 PySide6→PyQt6→PyQt5；第三方库放 `.tools/pylibs` 并插 sys.path
 
-## 7. 踩坑记录（已踩过，勿再踩）
+## 7. 发布流程（用户说"发布/推 GitHub"时按此执行，勿再即兴发挥）
+
+1. **版本号**：改 `lcsc_exporter/__init__.py` 的 `__version__`（唯一来源，安装包/更新检查都读它）
+2. **提交**：`git add -A` + commit（`dbg_*`/`out_*`/发布脚本已 gitignore，但提交前仍瞄一眼 `git status` 防误扫）
+3. **推送**：`git push origin master` —— 需 `danger-full-access`（schannel 在普通沙箱下被拦）；网络间歇性断 → **挂后台重试循环**（30s × 10 次），别干等
+4. **安装包**：`powershell -ExecutionPolicy Bypass -File installer\build_installer.ps1`（自动读版本号 → `dist\lcsc2altium-setup-{ver}.exe`）；删掉 dist 里被替代的旧版
+5. **发 Release**：`powershell -ExecutionPolicy Bypass -File installer\publish_release.ps1 [-Tag vX.Y.Z] [-NotesFile notes.md]` —— 该脚本**只存本地**（gitignore）：运行时从 Windows 凭据管理器读 git 已存的 `git:https://github.com` 凭据（CredRead P/Invoke，gho_ 令牌，repo scope）→ 环境变量传给 Python → Python urllib（OpenSSL，绕开 schannel 拦截）调 REST API 建 Release + 传资产；同 tag 已存在则复用并重传资产。**令牌绝不打印、绝不入库**
+6. **发布说明**：中文，三节结构「新功能 / 修复 / 安装」；用 `-NotesFile` 传入
+7. **验证**：`update.check_newer(老版本号)` 应返回新 release（自动更新链路活的标志）
+8. **清理**：一次性临时脚本用完即删；发布脚本保留在 `installer/publish_release.*`（本地）
+
+gh CLI 已装但**未登录**；若将来 `gh auth login` 过，`gh release create` 也可走。设备流授权页（github.com/login/device）用户打不开，别再推这条路。
+
+## 8. 踩坑记录（已踩过，勿再踩）
 
 1. **EasyEDA POLY 点列表混有 "L" 字符串** — 必须过滤非数值再配对（否则丝印线全乱）
 2. **PAD 的旋转不在后面的 90/0 字段** — 朝向编码在形状宽高里，rotation 取 idx8（通常为 0）
@@ -143,7 +156,7 @@ description: 立创商城（LCSC）元件编号 → 各 EDA（Altium/KiCad）可
 6. **沙箱网络** — schannel 被禁时 git/HTTPS 全挂，提权 danger-full-access 可解；SSH 22 端口彻底不通
 7. **改名防冲突** — 导出目录重命名要处理重名（回退 `{型号}_{编号}`）
 
-## 8. 验证清单（改动后必跑）
+## 9. 验证清单（改动后必跑）
 
 ```powershell
 # 1. 转换器样本回归（tests/samples/ 有 0402 + STM32 两个 EasyEDA 源）
@@ -167,7 +180,7 @@ from PySide6.QtWidgets import QApplication; app=QApplication([]); w=MainWindow()
 
 最终在真实 AD / KiCad 里导入验证由用户完成（本机无这两款软件）。
 
-## 9. 已知边界（转换器 v1）
+## 10. 已知边界（转换器 v1）
 
 - 已覆盖：RECT/OVAL 焊盘、POLY 折线、FILL 圆/矩形、引脚（名/号/角度/电气类型）、文本
 - 未覆盖：圆弧（ARC 段）、异形/多边形焊盘、通孔焊盘的钻孔提取、敷铜区、符号复杂图元（贝塞尔等）
