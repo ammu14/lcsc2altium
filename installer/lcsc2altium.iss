@@ -39,13 +39,15 @@ Name: "chinesesimp"; MessagesFile: "ChineseSimplified.isl"
 Source: "..\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion; Excludes: ".git\*,out\*,__pycache__\*,*.pyc,ai_config.json,dist\*,build\*,wheels\*,installer\*,.tools\innosetup-installer.exe,.tools\innosetup\*,.tools\pybuild\*,dl_inno*.py,probe_*.py,test_*.py,*.spec,lcsc_preview_*\*,.dsh-vision-router\*"
 
 [Icons]
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\lcsc2altium_gui.pyw"; WorkingDir: "{app}"
-Name: "{group}\{#AppName}"; Filename: "{app}\lcsc2altium_gui.pyw"; WorkingDir: "{app}"
+; 目标直指 pythonw.exe + 脚本参数，不依赖 ".pyw 文件关联"
+;（Store 版 Python 等环境下该关联常缺失，双击会弹"选择打开方式"）
+Name: "{autodesktop}\{#AppName}"; Filename: "{code:GetPythonw}"; Parameters: "{code:GetScriptParam}"; WorkingDir: "{app}"
+Name: "{group}\{#AppName}"; Filename: "{code:GetPythonw}"; Parameters: "{code:GetScriptParam}"; WorkingDir: "{app}"
 Name: "{group}\使用手册"; Filename: "{app}\使用手册.md"
 Name: "{group}\卸载 {#AppName}"; Filename: "{uninstallexe}"
 
 [Run]
-Filename: "{app}\lcsc2altium_gui.pyw"; Description: "安装完成后立即运行"; Flags: shellexec postinstall skipifsilent unchecked
+Filename: "{code:GetPythonw}"; Parameters: "{code:GetScriptParam}"; Description: "安装完成后立即运行"; Flags: postinstall skipifsilent unchecked
 
 [Code]
 // Python 检测: 先看注册表（python.org 安装包会写），再实际跑 python/py --version
@@ -84,4 +86,79 @@ begin
     ShellExec('open', 'https://www.python.org/downloads/', '', '', SW_SHOW,
               ewNoWait, ErrorCode);
   Result := False;
+end;
+
+// ---- 解析 pythonw.exe 绝对路径（安装时执行）----
+// 依次尝试: 1) 注册表 PythonCore\*\InstallPath  2) Microsoft Store 别名
+//           3) PATH 里 where pythonw  4) 兜底退回 .pyw（依赖文件关联）
+var
+  PythonwCache: String;
+
+function FindPythonwInHive(RootKey: Integer; const SubKey: String): String;
+var
+  Versions: TArrayOfString;
+  I: Integer;
+  P: String;
+begin
+  Result := '';
+  if RegGetSubkeyNames(RootKey, SubKey, Versions) then
+    for I := 0 to GetArrayLength(Versions) - 1 do
+      if RegQueryStringValue(RootKey,
+           SubKey + '\' + Versions[I] + '\InstallPath', '', P) then
+        if (P <> '') and FileExists(AddBackslash(P) + 'pythonw.exe') then
+        begin
+          Result := AddBackslash(P) + 'pythonw.exe';
+          Exit;
+        end;
+end;
+
+function FindPythonw: String;
+var
+  TmpFile, Line: String;
+  Lines: TArrayOfString;
+  Res: Integer;
+begin
+  // 1) 注册表（python.org 安装包）
+  Result := FindPythonwInHive(HKCU, 'SOFTWARE\Python\PythonCore');
+  if Result = '' then
+    Result := FindPythonwInHive(HKLM, 'SOFTWARE\Python\PythonCore');
+  if Result = '' then
+    Result := FindPythonwInHive(HKLM, 'SOFTWARE\WOW6432Node\Python\PythonCore');
+  // 2) Microsoft Store 版 Python 的别名路径
+  if Result = '' then
+  begin
+    Result := ExpandConstant('{localappdata}\Microsoft\WindowsApps\pythonw.exe');
+    if not FileExists(Result) then
+      Result := '';
+  end;
+  // 3) PATH 里找（scoop/choco/手动加 PATH 的情况）
+  if Result = '' then
+  begin
+    TmpFile := ExpandConstant('{tmp}\lcsc_pythonw.txt');
+    if Exec('cmd.exe', '/c where pythonw.exe > "' + TmpFile + '" 2>nul', '',
+            SW_HIDE, ewWaitUntilTerminated, Res) and (Res = 0)
+       and LoadStringsFromFile(TmpFile, Lines)
+       and (GetArrayLength(Lines) > 0) then
+    begin
+      Line := Trim(Lines[0]);
+      if FileExists(Line) then
+        Result := Line;
+    end;
+    DeleteFile(TmpFile);
+  end;
+  // 4) 兜底：退回 .pyw 脚本本身（老行为，依赖 .pyw 文件关联）
+  if Result = '' then
+    Result := ExpandConstant('{app}\lcsc2altium_gui.pyw');
+end;
+
+function GetPythonw(Param: String): String;
+begin
+  if PythonwCache = '' then
+    PythonwCache := FindPythonw;
+  Result := PythonwCache;
+end;
+
+function GetScriptParam(Param: String): String;
+begin
+  Result := '"' + ExpandConstant('{app}\lcsc2altium_gui.pyw') + '"';
 end;
