@@ -180,7 +180,16 @@ from PySide6.QtWidgets import QApplication; app=QApplication([]); w=MainWindow()
 
 最终在真实 AD / KiCad 里导入验证由用户完成（本机无这两款软件）。
 
-## 10. 已知边界（转换器 v1）
+## 10. 跨机器可移植性（1.2.3 实测）
+
+- **Python 范围**：内置 `PySide6 6.11.2` 的 wheel tag 是 `cp310-abi3-win_amd64`，METADATA 要求 `>=3.10,<3.15`。目标机必须是 **64 位 Python 3.10–3.14**；32 位或 3.15 会在加载 `shiboken6` 时失败。安装向导必须**直接 Exec 候选 `python.exe` 跑检查**（退出码 0/42），不要用 `cmd /c` 拼引号——`>nul 2>&1` 很容易被吃进 `-c` 代码导致 SyntaxError、所有候选被误判。
+- **无 pip**：`.tools/pylibs` 已带完整 PySide6（含 Qt DLL/plugins/VC 运行库），目标机只需 Python 本体；启动时 GUI 把 `.tools/pylibs` 插到 `sys.path[0]`。
+- **npnp 的 VC 依赖**：`npnp.exe` 引用 `VCRUNTIME140.dll`，干净 Windows 不保证有。构建前把 `.tools/pylibs/PySide6/vcruntime140.dll` 复制到 `.tools/bin/`，与 exe 同目录即可本地解析。
+- **路径兼容**：中文+空格安装目录已验证可启动、可真实导出 AD/KiCad；默认 `out/` 是相对工作目录。
+- **快捷方式**：目标必须是解析出的 `pythonw.exe` 绝对路径 + 脚本参数，不依赖 `.pyw` 关联（Store 版 Python 常缺关联）。安装向导用 `SuppressibleMsgBox`，静默安装不会卡在自定义提示框。
+- **验证矩阵**：`python -S`（屏蔽全局 site-packages）分别用 3.10 嵌入式发行版和本机 3.14 跑启动自检 + AD/KiCad 真实导出 + 合并库；同时检查安装包不含 `ai_config.json`、`dbg_*`、`tests/`、`skills/`。
+
+## 11. 已知边界（转换器 v1）
 
 - 已覆盖：RECT/OVAL 焊盘、POLY 折线、FILL 圆/矩形、引脚（名/号/角度/电气类型）、文本
 - 未覆盖：圆弧（ARC 段）、异形/多边形焊盘、通孔焊盘的钻孔提取、敷铜区、符号复杂图元（贝塞尔等）

@@ -37,9 +37,9 @@
 
 ## 快速开始
 
-> **给最终用户**：拿 `lcsc2altium-setup-x.x.x.exe` 安装包，双击一路"下一步"（自动检测/引导安装 Python）。构建方式：`powershell -File installer\build_installer.ps1`。
+> **给最终用户**：需要 **64 位 Windows 10/11 + 64 位 Python 3.10–3.14**。拿 `lcsc2altium-setup-x.x.x.exe` 双击一路“下一步”，安装向导会检查 Python 版本和位数；PySide6、npnp 和 VC 运行库均已内置，**无需 pip 安装任何依赖**。构建方式：`powershell -File installer\build_installer.ps1`。
 >
-> **绿色便携**：本工具自包含（只需装 Python）——装 Python → 拷贝整个文件夹 → 双击运行，详见 `使用手册.md`。
+> **绿色便携**：装兼容 Python → 拷贝整个文件夹（不含本机密钥 `ai_config.json`）→ 双击运行，详见 `使用手册.md`。
 
 ```powershell
 python -m lcsc_exporter.app
